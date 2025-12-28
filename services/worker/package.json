@@ -1,0 +1,11 @@
+{
+  "name": "n23t-worker",
+  "type": "module",
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "bullmq": "^5.16.0",
+    "ioredis": "^5.4.1",
+    "prisma": "^5.22.0",
+    "prom-client": "^15.1.3"
+  }
+}

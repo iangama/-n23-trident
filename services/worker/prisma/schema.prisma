@@ -1,0 +1,72 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EvidenceStatus {
+  PENDING
+  RUNNING
+  VERIFIED
+  REJECTED
+}
+
+model User {
+  id          Int              @id @default(autoincrement())
+  email       String           @unique
+  password    String
+  createdAt   DateTime         @default(now())
+  memberships WorkspaceUser[]
+}
+
+model Workspace {
+  id        Int              @id @default(autoincrement())
+  name      String
+  createdAt DateTime         @default(now())
+  users     WorkspaceUser[]
+  claims    Claim[]
+}
+
+model WorkspaceUser {
+  id          Int @id @default(autoincrement())
+  userId      Int
+  workspaceId Int
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+}
+
+model Claim {
+  id          Int      @id @default(autoincrement())
+  workspaceId Int
+  text        String
+  createdAt   DateTime @default(now())
+  evidences   Evidence[]
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Evidence {
+  id        Int            @id @default(autoincrement())
+  claimId   Int
+  source    String
+  excerpt   String
+  filePath  String?
+  score     Int            @default(0)
+  status    EvidenceStatus @default(PENDING)
+  reason    String         @default("")
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  claim Claim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@index([claimId])
+  @@index([status])
+}

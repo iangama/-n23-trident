@@ -1,0 +1,147 @@
+services:
+  traefik:
+    image: traefik:v3.1
+    container_name: n23t-traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:8880
+      - --accesslog=true
+      - --log.level=INFO
+    ports:
+      - "8880:8880"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [n23t]
+
+  db:
+    image: postgres:16-alpine
+    container_name: n23t-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - n23t_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [n23t]
+
+  redis:
+    image: redis:7-alpine
+    container_name: n23t-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - n23t_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [n23t]
+
+  api:
+    build:
+      context: ./services/api
+    container_name: n23t-api
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./services/api/uploads:/app/uploads
+    labels:
+      - traefik.http.routers.n23t-metrics.rule=Host(`${N23_HOST}`) && Path(`/metrics`)
+      - traefik.http.routers.n23t-metrics.entrypoints=web
+      - traefik.http.routers.n23t-metrics.priority=1000
+      - traefik.http.routers.n23t-metrics.service=n23t-api
+      - traefik.enable=true
+      - traefik.http.routers.n23t-api.rule=Host(`${N23_HOST}`) && PathPrefix(`/api`)
+      - traefik.http.routers.n23t-api.entrypoints=web
+      - traefik.http.services.n23t-api.loadbalancer.server.port=3000
+    networks: [n23t]
+
+  worker:
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/metrics >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    build:
+      context: ./services/worker
+    container_name: n23t-worker
+    env_file: .env
+    depends_on:
+      api:
+        condition: service_started
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [n23t]
+
+  web:
+    build:
+      context: ./apps/web
+    container_name: n23t-web
+    depends_on:
+      - api
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.n23t-web.rule=Host(`${N23_HOST}`)
+      - traefik.http.routers.n23t-web.entrypoints=web
+      - traefik.http.services.n23t-web.loadbalancer.server.port=5173
+    networks: [n23t]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: n23t-prometheus
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.n23t-prom.rule=Host(`${N23_HOST}`) && PathPrefix(`/prom`)
+      - traefik.http.routers.n23t-prom.entrypoints=web
+      - traefik.http.middlewares.n23t-prom-stripprefix.stripprefix.prefixes=/prom
+      - traefik.http.routers.n23t-prom.middlewares=n23t-prom-stripprefix
+      - traefik.http.services.n23t-prom.loadbalancer.server.port=9090
+    networks: [n23t]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: n23t-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - n23t_grafana:/var/lib/grafana
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.n23t-graf.rule=Host(`${N23_HOST}`) && PathPrefix(`/graf`)
+      - traefik.http.routers.n23t-graf.entrypoints=web
+      - traefik.http.middlewares.n23t-graf-stripprefix.stripprefix.prefixes=/graf
+      - traefik.http.routers.n23t-graf.middlewares=n23t-graf-stripprefix
+      - traefik.http.services.n23t-graf.loadbalancer.server.port=3000
+    networks: [n23t]
+
+networks:
+  n23t:
+
+volumes:
+  n23t_db:
+  n23t_redis:
+  n23t_grafana:
